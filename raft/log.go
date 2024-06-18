@@ -71,7 +71,11 @@ func (l *RaftLog) maybeCompact() {
 // note, this is one of the test stub functions you need to implement.
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return l.entries
+	fi, _ := l.storage.FirstIndex()
+	li, _ := l.storage.LastIndex()
+	entries, _ := l.storage.Entries(fi, li+1)
+	entries = append(entries, l.entries...)
+	return entries
 }
 
 // unstableEntries return all the unstable entries
@@ -82,14 +86,22 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	// Your Code Here (2A).
-	return l.entries[l.committed-l.Offset()+1:]
+	offset := l.Offset()
+	// All entries can be found without going to storage
+	if l.applied >= offset {
+		return l.entries[l.applied-offset+1 : l.committed-offset+1]
+	}
+	// Some entries are in storage
+	entriesFromStorage, _ := l.storage.Entries(l.applied+1, offset)
+	entriesFromStorage = append(entriesFromStorage, l.entries...)
+	return entriesFromStorage
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		return 0
+		li, _ := l.storage.LastIndex()
+		return li
 	}
 	return l.entries[len(l.entries)-1].Index
 }

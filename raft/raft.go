@@ -338,19 +338,31 @@ func (r *Raft) handlePropose(m pb.Message) {
 	if r.State == StateCandidate {
 		return
 	}
-	if r.State == StateLeader {
-		for _, entry := range m.Entries {
-			entry.Index = r.RaftLog.LastIndex() + 1
-			entry.Term = r.Term
-			r.RaftLog.entries = append(r.RaftLog.entries, *entry)
-		}
-		newLastIdx := r.RaftLog.LastIndex()
-		r.Prs[r.id].Match = newLastIdx
-		r.Prs[r.id].Next = newLastIdx + 1
-		for _, id := range r.Peers {
-			if id != r.id {
-				r.sendAppend(id)
-			}
+	if r.State == StateFollower {
+		/*
+			When passed to follower, 'MessageType_MsgPropose' is stored in follower's mailbox(msgs)
+			by the send method. It is stored with sender's ID and later forwarded to the leader by
+			rafthttp package.
+		*/
+		r.msgs = append(r.msgs, m)
+		return
+	}
+	for _, entry := range m.Entries {
+		entry.Index = r.RaftLog.LastIndex() + 1
+		entry.Term = r.Term
+		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
+	}
+	newLastIdx := r.RaftLog.LastIndex()
+	r.Prs[r.id].Match = newLastIdx
+	r.Prs[r.id].Next = newLastIdx + 1
+	if len(r.Peers) == 1 {
+		// Handle leader only situation
+		r.RaftLog.committed = newLastIdx
+		return
+	}
+	for _, id := range r.Peers {
+		if id != r.id {
+			r.sendAppend(id)
 		}
 	}
 }
@@ -416,9 +428,8 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	if r.State == StateCandidate {
 		r.becomeFollower(m.Term, m.From)
 	}
-	// Reject if not match
-	// Term == 0 -> there is no previous entries, since leader term must > 0
-	if m.Term != 0 {
+	// Reject if prev not match
+	if m.Index != 0 {
 		logTerm, err := r.RaftLog.Term(m.Index)
 		if err != nil || logTerm != m.LogTerm {
 			resp.Reject = true
@@ -426,56 +437,59 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			return
 		}
 	}
-	offset := r.RaftLog.Offset()
 	for _, entry := range m.Entries {
-		idx := entry.Index - offset
-		// such index exist
-		if idx < uint64(len(m.Entries)) {
-			existing := r.RaftLog.entries[idx]
-			// No conflict
-			if existing.Term == entry.Term {
+		li := r.RaftLog.LastIndex()
+		if entry.Index <= li {
+			// such index exist
+			term, _ := r.RaftLog.Term(entry.Index)
+			if term == entry.Term {
+				// No conflict
 				continue
 			}
-			// Discard
-			r.RaftLog.entries = r.RaftLog.entries[:idx]
+			// Term conflicts, discard
+			offset := r.RaftLog.Offset()
+			conflictIdx := entry.Index - offset
+			r.RaftLog.entries = r.RaftLog.entries[:conflictIdx]
 		}
 		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 	}
-	// Update commit index
 	if m.Commit > r.RaftLog.committed {
-		r.RaftLog.committed = min(m.Commit, m.Entries[len(m.Entries)-1].Index)
+		// If leaderCommit > commitIndex
+		// set commitIndex = min(leaderCommit, index of last new entry)
+		r.RaftLog.committed = min(m.Commit, r.RaftLog.LastIndex())
 	}
 	resp.Reject = false
 	r.msgs = append(r.msgs, resp)
 }
 
 func (r *Raft) handleAppendEntriesResp(m pb.Message) {
-	if !m.Reject {
-		// If successful: update nextIndex and matchIndex for follower (§5.3)
-		newMatchIdx := r.RaftLog.LastIndex()
-		r.Prs[m.From].Next = newMatchIdx + 1
-		r.Prs[m.From].Match = newMatchIdx
-		// If there exists an N such that N > commitIndex,
-		// a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-		// set commitIndex = N (§5.3, §5.4).
-		if newMatchIdx > r.RaftLog.committed {
-			committedPeer := 0
-			for _, progress := range r.Prs {
-				if progress.Match >= newMatchIdx {
-					committedPeer++
-				}
-			}
-			if committedPeer >= len(r.Peers)/2 {
-				term, err := r.RaftLog.Term(newMatchIdx)
-				if err == nil && term == r.Term {
-					r.RaftLog.committed = newMatchIdx
-				}
-			}
-		}
-	} else {
+	if m.Reject {
 		// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
 		r.Prs[m.From].Next--
 		r.sendAppend(m.From)
+		return
+	}
+	// If successful: update nextIndex and matchIndex for follower (§5.3)
+	newMatchIdx := r.RaftLog.LastIndex()
+	r.Prs[m.From].Next = newMatchIdx + 1
+	r.Prs[m.From].Match = newMatchIdx
+	// If there exists an N such that N > commitIndex,
+	// a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+	// set commitIndex = N (§5.3, §5.4).
+	if newMatchIdx <= r.RaftLog.committed {
+		return
+	}
+	committedPeer := 0
+	for _, progress := range r.Prs {
+		if progress.Match >= newMatchIdx {
+			committedPeer++
+		}
+	}
+	if committedPeer > len(r.Peers)/2 {
+		term, err := r.RaftLog.Term(newMatchIdx)
+		if err == nil && term == r.Term {
+			r.RaftLog.committed = newMatchIdx
+		}
 	}
 }
 
