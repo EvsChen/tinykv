@@ -450,6 +450,8 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			offset := r.RaftLog.Offset()
 			conflictIdx := entry.Index - offset
 			r.RaftLog.entries = r.RaftLog.entries[:conflictIdx]
+			// The conflict entries are not stabled anymore
+			r.RaftLog.stabled = min(r.RaftLog.stabled, entry.Index-1)
 		}
 		r.RaftLog.entries = append(r.RaftLog.entries, *entry)
 	}

@@ -56,7 +56,16 @@ type RaftLog struct {
 // to the state that it just commits and applies the latest snapshot.
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).
-	return &RaftLog{storage: storage}
+	raftLog := &RaftLog{}
+	raftLog.storage = storage
+	fi, _ := storage.FirstIndex()
+	li, _ := storage.LastIndex()
+	raftLog.stabled = li
+	entries, _ := storage.Entries(fi, li+1)
+	for _, entry := range entries {
+		raftLog.entries = append(raftLog.entries, entry)
+	}
+	return raftLog
 }
 
 // We need to compact the log entries in some point of time like
@@ -71,11 +80,7 @@ func (l *RaftLog) maybeCompact() {
 // note, this is one of the test stub functions you need to implement.
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).
-	fi, _ := l.storage.FirstIndex()
-	li, _ := l.storage.LastIndex()
-	entries, _ := l.storage.Entries(fi, li+1)
-	entries = append(entries, l.entries...)
-	return entries
+	return l.entries
 }
 
 // unstableEntries return all the unstable entries
@@ -86,22 +91,13 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	offset := l.Offset()
-	// All entries can be found without going to storage
-	if l.applied >= offset {
-		return l.entries[l.applied-offset+1 : l.committed-offset+1]
-	}
-	// Some entries are in storage
-	entriesFromStorage, _ := l.storage.Entries(l.applied+1, offset)
-	entriesFromStorage = append(entriesFromStorage, l.entries...)
-	return entriesFromStorage
+	return l.entries[l.applied-l.Offset()+1 : l.committed-l.Offset()+1]
 }
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	if len(l.entries) == 0 {
-		li, _ := l.storage.LastIndex()
-		return li
+		return 0
 	}
 	return l.entries[len(l.entries)-1].Index
 }
