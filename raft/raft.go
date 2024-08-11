@@ -227,7 +227,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
-func (r *Raft) sendHeartbeat(to uint64, empty bool) {
+func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
 	m := pb.Message{
 		MsgType: pb.MessageType_MsgHeartbeat,
@@ -236,9 +236,6 @@ func (r *Raft) sendHeartbeat(to uint64, empty bool) {
 		Term:    r.Term,
 		Commit:  r.RaftLog.committed,
 	}
-	// if !empty {
-	// 	r.prepareEntriesForMsg(&m, r.Prs[to].Next)
-	// }
 	r.msgs = append(r.msgs, m)
 }
 
@@ -262,7 +259,7 @@ func (r *Raft) tick() {
 		if r.heartbeatElapsed == r.heartbeatTimeout {
 			for _, serverID := range r.Peers {
 				if serverID != r.id {
-					r.sendHeartbeat(serverID, true)
+					r.sendHeartbeat(serverID)
 				}
 			}
 			r.heartbeatElapsed = 0
@@ -530,6 +527,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 }
 
 func (r *Raft) handleHeartbeatResp(m pb.Message) {
+	// If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
 	if r.RaftLog.LastIndex() > m.Index {
 		r.sendAppend(m.From)
 	}
@@ -577,7 +575,7 @@ func (r *Raft) handleBeat(_ pb.Message) {
 	if r.State == StateLeader {
 		for _, serverID := range r.Peers {
 			if serverID != r.id {
-				r.sendHeartbeat(serverID, false)
+				r.sendHeartbeat(serverID)
 			}
 		}
 	}
@@ -587,7 +585,6 @@ func (r *Raft) handleBeat(_ pb.Message) {
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).
 	r.heartbeatTimeout = 0
-	r.Lead = m.From
 	resp := r.handleAppendOrHeartbeat(m)
 	resp.MsgType = pb.MessageType_MsgHeartbeatResponse
 	r.msgs = append(r.msgs, *resp)
