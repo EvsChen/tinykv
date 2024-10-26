@@ -179,6 +179,8 @@ func newRaft(c *Config) *Raft {
 	raft.RaftLog = newLog(c.Storage)
 	hardState, _, _ := c.Storage.InitialState()
 	raft.Vote = hardState.Vote
+	raft.Term = hardState.Term
+	raft.RaftLog.committed = hardState.Commit
 
 	raft.Prs = make(map[uint64]*Progress)
 	for _, id := range raft.Peers {

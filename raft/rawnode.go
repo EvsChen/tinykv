@@ -16,6 +16,7 @@ package raft
 
 import (
 	"errors"
+	"reflect"
 
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 )
@@ -68,14 +69,17 @@ type Ready struct {
 
 // RawNode is a wrapper of Raft.
 type RawNode struct {
-	Raft *Raft
+	Raft          *Raft
+	lastSoftState SoftState
 	// Your Data Here (2A).
 }
 
 // NewRawNode returns a new RawNode given configuration and a list of raft peers.
 func NewRawNode(config *Config) (*RawNode, error) {
-	// Your Code Here (2A).
-	return nil, nil
+	rawNode := &RawNode{Raft: newRaft(config)}
+	rawNode.lastSoftState.Lead = 0
+	rawNode.lastSoftState.RaftState = StateFollower
+	return rawNode, nil
 }
 
 // Tick advances the internal logical clock by a single tick.
@@ -143,7 +147,41 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
-	return Ready{}
+	ready := Ready{}
+	raft := rn.Raft
+	curSoftState := SoftState{
+		Lead:      raft.Lead,
+		RaftState: raft.State,
+	}
+	ready.SoftState = nil
+	if !reflect.DeepEqual(curSoftState, rn.lastSoftState) {
+		ready.SoftState = &curSoftState
+	}
+	curHardState := pb.HardState{
+		Term:   raft.Term,
+		Vote:   raft.Vote,
+		Commit: raft.RaftLog.committed,
+	}
+	initHardState, _, _ := raft.RaftLog.storage.InitialState()
+	// hasUpdate := curHardState.Term != initHardState.Term || curHardState.Vote != initHardState.Vote || curHardState.Commit != initHardState.Commit
+	hasUpdate := !reflect.DeepEqual(curHardState, initHardState)
+	// If there is no update, return empty hard state
+	if hasUpdate {
+		ready.HardState = curHardState
+	} else {
+		ready.HardState = pb.HardState{}
+	}
+	// (stabled, last]
+	ready.Entries = raft.RaftLog.unstableEntries()
+	if raft.RaftLog.pendingSnapshot != nil {
+		ready.Snapshot = *raft.RaftLog.pendingSnapshot
+	} else {
+		ready.Snapshot = pb.Snapshot{}
+	}
+	// (applied, committed]
+	ready.CommittedEntries = raft.RaftLog.nextEnts()
+	// ready.Messages = raft.msgs
+	return ready
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
@@ -156,6 +194,11 @@ func (rn *RawNode) HasReady() bool {
 // last Ready results.
 func (rn *RawNode) Advance(rd Ready) {
 	// Your Code Here (2A).
+	raft := rn.Raft
+	raft.RaftLog.stabled = raft.RaftLog.LastIndex()
+	raft.RaftLog.pendingSnapshot = nil
+	raft.RaftLog.applied = raft.RaftLog.committed
+	raft.msgs = append(raft.msgs, rd.Messages...)
 }
 
 // GetProgress return the Progress of this node and its peers, if this

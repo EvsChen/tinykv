@@ -84,8 +84,8 @@ func (l *RaftLog) allEntries() []pb.Entry {
 }
 
 // unstableEntries return all the unstable entries
+// (stable,last]
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	// Your Code Here (2A).
 	entries := l.allEntries()
 	lastStabled := l.stabled - l.Offset()
 	// If already last
@@ -96,8 +96,11 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 }
 
 // nextEnts returns all the committed but not applied entries
+// (applied, committed]
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	return l.allEntries()[l.applied-l.Offset()+1 : l.committed-l.Offset()+1]
+	offset := l.Offset()
+	entries := l.allEntries()
+	return entries[l.applied-offset+1 : l.committed-offset+1]
 }
 
 // LastIndex return the last index of the log entries
